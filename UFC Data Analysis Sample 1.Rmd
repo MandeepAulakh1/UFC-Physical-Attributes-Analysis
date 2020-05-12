@@ -1,0 +1,2218 @@
+---
+title: "R Notebook"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+# Sample of UFC Data analysis
+
+```{r}
+#Read Data
+UFCdata <- read.csv("data.csv", header = TRUE)
+head(UFCdata)
+```
+
+# Clean Data
+```{r}
+#Look at structure of Data Set
+str(UFCdata)
+
+##Do not want to use these columns (Referee, Location, Title, Rounds) for our prediction, want to focus on features aligned to the fighter (specifically we want to focus on physical features for our model). We will also remove the date column later.
+UFCdata <- UFCdata[c(-3,-5,-7,-9)]
+```
+
+```{r}
+# R_fighter & B_fighter are the fighter's name which will be the inputs of the model. They will not be used for prediction. They are essentially used as labels for whoever wins the fight. 
+# Will have to extract names from data later
+```
+
+```{r}
+# Winner currently has three levels; however the model we will use will either predicting a "Win" or "Loss". Therefore, we will remove observations that end in a draw. The number is relatively small, therefore is not concerning, but is limitation for our future model.
+sum(UFCdata$Winner == "Draw")
+UFCdata <- UFCdata[UFCdata$Winner !="Draw",]
+UFCdata$Winner <- factor(UFCdata$Winner)
+levels(UFCdata$Winner)
+```
+
+
+```{r}
+# Check for NAs 
+sapply(UFCdata, function(x) {sum(is.na(x))})
+
+# The NAs in R_age, B_age, R_reach_cms, & B_reach_cms pose a problem as we believe these physical features to have an effect on the fight outcome and simply appear to be missing. Thankfully, these points make up a relatively small part of the data set, therefore observations in these columns will be removed
+UFCdata <- UFCdata[is.na(UFCdata$R_age) == FALSE,]
+UFCdata <- UFCdata[is.na(UFCdata$B_age) == FALSE,]
+UFCdata <- UFCdata[is.na(UFCdata$R_Reach_cms) == FALSE,]
+UFCdata <- UFCdata[is.na(UFCdata$B_Reach_cms) == FALSE,]
+
+# First, there are a lot of NAs remaining in the data. However, the NAs that appear are in features relating to UFC career stats. These NAs mean that it’s the fighters first fight, therefore do not have data from pervious fights to fill out the columns. These cells will be converted to 0s showing the fighters lack of experience and true stats at the moment. It is important to keep these observations as it will help us account for first time fighters.
+UFCdata[is.na(UFCdata)] <- 0
+```
+
+```{r}
+# Double Check Data
+sapply(UFCdata, function(x) {sum(is.na(x))})
+```
+
+```{r}
+#Check for Missing Data
+sapply(UFCdata, function(x){sum(x=="")})
+
+# It appears a few observations in B_Stance & R_Stance are missing. These observations will be removed. 
+UFCdata <- UFCdata[UFCdata$B_Stance !="",]
+UFCdata <- UFCdata[UFCdata$R_Stance !="",]
+```
+
+```{r}
+#Double Check Data
+sapply(UFCdata, function(x){sum(x=="")})
+```
+
+```{r}
+# Due to the rules of UFC drastically changing after 2000, the data set should only contain observations past 2000.
+# First, Change structure of date from Factor to Date
+str(UFCdata$date)
+UFCdata$date <- as.Date(UFCdata$date)
+
+# Split Data Set Between Old UFC & Modern UFC
+UFCdata <- UFCdata[UFCdata$date > "1999-12-31",]
+
+# Now remove the date feature for the same reasons described in the second chunk.
+UFCdata <- UFCdata[c(-3)]
+```
+
+```{r}
+# Different subsets of the data will be created based on the weight class. We are doing this because fighters from two different weight classes would never fight each other under UFC rules. We will be conducting analysis on different weight classes to produce a more accurate model for each class
+```
+
+```{r}
+# Now lets subset the data into different weight classes
+# See Number of Weight Classes
+levels(UFCdata$weight_class)
+```
+
+```{r}
+#Create Datasets for Different Weight Classes
+weightclass <- levels(UFCdata$weight_class)
+for(i in 1:14) {
+  name <- weightclass[i]
+  assign(name, UFCdata[UFCdata$weight_class == weightclass[i],])
+}
+```
+
+# Exploratory 
+
+```{r}
+#Distribution between Weight Classes
+barplot((summary(UFCdata$weight_class)),col="pink")
+```
+Number of observations vary between weight classes, due to some class being more popular than others.
+
+
+```{r}
+# Distribution of matches by number of rounds
+UFCdataRounds <- read.csv("data.csv", header = TRUE)
+UFCdataRounds$no_of_rounds <- as.factor(as.character(UFCdataRounds$no_))
+barplot((summary(UFCdataRounds$no_of_rounds)))
+```
+There is only a small number of 5 round fights which are typically title fights, these were remove because we want our model to focus on physical attributes. 
+
+
+```{r}
+# Load ggplot2
+library(ggplot2)
+```
+
+
+```{r}
+#tittle 
+data <- data.frame(
+  group=c("False","True"),
+  value=c(.934,.065)
+)
+
+ggplot(data, aes(x="", y=value, fill=group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  
+  theme_void()
+```
+
+```{r}
+# Distribution of age in the UFC (Red Fighters)
+UFCdata$R_age <- as.factor(as.character(UFCdata$R_age))
+barplot((summary(UFCdata$R_age)), col = "red")
+```
+
+```{r}
+# Distribution of age in the UFC (Blue Fighters)
+UFCdata$B_age <- as.factor(as.character(UFCdata$B_age))
+barplot((summary(UFCdata$B_age)),col = "lightblue")
+```
+
+```{r}
+# Histograms of fighters accuracy
+UFCdata$B_body_accuracy <- UFCdata$B_avg_BODY_landed/UFCdata$B_avg_BODY_att
+hist(UFCdata$B_body_accuracy)
+UFCdata$R_body_accuracy <- UFCdata$R_avg_BODY_landed/UFCdata$R_avg_BODY_att
+hist(UFCdata$R_body_accuracy)
+UFCdata$body_accuracy_diff <- UFCdata$R_body_accuracy - UFCdata$B_body_accuracy
+hist(UFCdata$body_accuracy_diff)
+```
+With this data we can calculate cool fighter stats like efficiency. 
+
+
+```{r}
+# Number of fights throughout the years
+UFCdataRounds$date <- as.character(UFCdataRounds$date)
+UFCdataRounds$year <- as.factor(substring(UFCdataRounds$date,1,4))
+barplot(summary(UFCdataRounds$year))
+```
+The number of observations grows as the years increases, due to UFC becoming more popular. 
+
+```{r}
+#Breakdown of Red Winners, Blue Winners, Draws
+UFCdata$Winner <- as.factor(UFCdata$Winner)
+
+data <- data.frame(
+  group=c("Red Wins","Blue Wins","Draw"),
+  value=c(.675,.309,.016)
+)
+
+ggplot(data, aes(x="", y=value, fill=group)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  
+  theme_void()
+```
+There is major data imbalance that our later models will try to fix. THE CORNER SHOULD NOT EFFECT A FIGHTERS CHANCE OF WINNING, the reason there is this data imbalance is UFC promoters have put their champions and favourites in that corner, causing that side to win more. However the model we make should ignore the corner they are standing in as it should not affect the result.
+
+# Max & Min Weight of (Heavyweight) Class
+```{r}
+MinFighterWeights <- c(min(Heavyweight$B_Weight_lbs),min(Heavyweight$R_Weight_lbs))
+min(MinFighterWeights)
+
+MaxFighterWeights <- c(max(Heavyweight$B_Weight_lbs),max(Heavyweight$R_Weight_lbs))
+max(MaxFighterWeights)
+
+```
+
+# Average Height of (Heavyweight) Class
+```{r}
+AverageHeights <- c(mean(Heavyweight$B_Height_cms),mean(Heavyweight$B_Height_cms))
+mean(AverageHeights) 
+```
+
+# Summary Statistics of (Heavyweight) Class
+```{r}
+# NOT running the code because it is extremely long
+"summary(Heavyweight)
+summary(Heavyweight$B_age)
+summary(Heavyweight$B_Height_cms)
+summary(Heavyweight$B_Weight_lbs)"
+```
+
+
+#-------------------------------------------------------------------------------------------------------------
+# MAIN QUESTION WE WANT TO ANSWER: Who is likely to win a UFC fight based on Physcial Attributes?
+The hope of this model is that a potential fighter entering the UFC can use model to see what weight class they would be most successful in based on their physical attributes. Therefore, a fighter can prioritize and train for a weight class that he would have an advantage in due to his physical attributes. HOWEVER, we are aware a physical attributes should not fully explain the result of the fight. The sport usually requires experience, training, and mental strategy to be successful, but physical attributes can give some advantages to fighters.
+#--------------------------------------------------------------------------------------------------------------
+
+# -------------------------------------------------------------------------------------------------------------
+ 
+# Who is likely to win a UFC fight based on Physcial Attributes
+
+#--------------------------------------------------------------------------------------------------------------
+
+#------------------------------------------------
+#Welterweight
+#------------------------------------------------
+
+Read the data
+```{r}
+#Select Physical Features
+WelterweightPhy <-  Welterweight[c(1,2,3,69,70,71,136,137,138,139,140)]
+head(WelterweightPhy)
+```
+
+# Create testing & training sets for SVM, K-NN, & Neural Networks
+
+```{r}
+# Normalize All the Attributes
+for (i in 4:dim(WelterweightPhy)[2])
+{
+  WelterweightPhy[i] = (WelterweightPhy[i]-mean(WelterweightPhy[,i]))/sd(WelterweightPhy[,i])
+}
+
+# Display the first few elements of the standarized data
+head(WelterweightPhy)
+```
+
+```{r}
+# Create Training and Testing Sets
+num_samples = dim(WelterweightPhy)[1]
+sampling.rate = 0.80
+training <- sample(1:num_samples, sampling.rate * num_samples, replace=FALSE)
+trainingSet <- WelterweightPhy[training, ]
+testing <- setdiff(1:num_samples,training)
+testingSet <- WelterweightPhy[testing, ]
+```
+
+```{r}
+# Slpit Fighter's names from sets
+trainingSet2 <- trainingSet[c(-1,-2)]
+testingSet2 <- testingSet[c(-1,-2)]
+```
+
+
+# K-Nearest Neighbors
+
+```{r}
+# Get the features of the training set
+trainingfeatures <- subset(trainingSet2, select=c(-Winner))
+# Get the labels of the training set
+traininglabels <- trainingSet2$Winner
+# Get the features of the testing set
+testingfeatures <- subset(testingSet2, select=c(-Winner))
+```
+
+```{r}
+# Load the classification library
+library(class)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(1,50, 1))
+{
+  predictedLabels = knn(trainingfeatures,testingfeatures,traininglabels,k=i)
+sizeTestSet = dim(testingSet2)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+
+```{r}
+# Create Predictions Table to store predictions from different models
+PredictionsTable <- data.frame(matrix(ncol = 3, nrow = dim(testingSet)[1]))
+x <- c("KNN","SVM","NN")
+colnames(PredictionsTable) <- x
+# Fill in KNN Col
+PredictionsTable$KNN <- predictedLabels
+```
+
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+
+#SVM
+
+```{r}
+# Load the SVM Library
+library(e1071)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(10,100, 10))
+{
+  svmModel <- svm(Winner~., data=trainingSet2, kernel="linear", cost=i)
+  predictedLabels <-predict(svmModel, testingSet2)
+sizeTestSet = dim(testingSet)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$SVM <- predictedLabels
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+# Neural Networks
+
+
+
+```{r}
+# Convert the characters to numeric values
+# training
+trainingSet2$Winner <- as.character(trainingSet2$Winner)
+trainingSet2$Winner[trainingSet2$Winner=="Red"] = 0
+trainingSet2$Winner[trainingSet2$Winner=="Blue"] = 1
+trainingSet2$Winner <- as.numeric(trainingSet2$Winner)
+# testing
+testingSet2$Winner <- as.character(testingSet2$Winner)
+testingSet2$Winner[testingSet2$Winner=="Red"] = 0
+testingSet2$Winner[testingSet2$Winner=="Blue"] = 1
+testingSet2$Winner <- as.numeric(testingSet2$Winner)
+```
+
+```{r}
+#Load the Neural Net Library
+library(neuralnet)
+#Train a Neural Network. Note that the formula should be explicitly specified.
+#Since we are doing a classification, we need to set linear.output=FALSE
+#We will also use a Neural network with 2 hidden layers, with 7, 5 neurons respectively
+nnModel <- neuralnet(Winner~., data=trainingSet2, hidden=c(7,5), linear.output=FALSE)
+```
+
+```{r}
+# Plot
+plot(nnModel)
+```
+
+```{r}
+# Perform prdictions for the testing set
+predictedLabels <-neuralnet::compute(nnModel, testingSet2[,2:9])
+
+#The result is stored in predictedLabels$net.result
+#Note that we need to round the predictions to get 0 or 1
+predictedLabels<-round(predictedLabels$net.result)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the number of data points that are misclassified
+error = sum(predictedLabels != testingSet2$Winner)
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 0)
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 1)
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$NN <- predictedLabels
+```
+
+```{r}
+# Convert #s to labels
+PredictionsTable$NN <- as.character(PredictionsTable$NN)
+PredictionsTable$NN[PredictionsTable$NN== "0" ] = "Red"
+PredictionsTable$NN[PredictionsTable$NN== "1"] = "Blue"
+```
+
+
+# Convert Back
+```{r}
+# Convert back
+# training
+trainingSet2$Winner[trainingSet2$Winner== 0 ] = "Red"
+trainingSet2$Winner[trainingSet2$Winner== 1 ] = "Blue"
+trainingSet2$Winner <- as.factor(trainingSet2$Winner)
+# testing
+testingSet2$Winner[testingSet2$Winner== 0 ] = "Red"
+testingSet2$Winner[testingSet2$Winner== 1 ] = "Blue"
+testingSet2$Winner <- as.factor(testingSet2$Winner)
+```
+
+
+
+
+# Fixing class Imbalance 
+Most the data has the red class winning, which should not be the case due to qualitative reasons (a lot to explain). Both red and blue class should equally represented as possible. 
+
+Ideally would convert winning red observations into winning blue observations, but do not know who to do that yet.
+
+Instead, I will try to achieve this by over and under sampling. 
+
+```{r}
+library(ROSE)
+```
+
+```{r}
+#See # of wins between colors
+table(trainingSet$Winner)
+```
+
+```{r}
+ROSE <- ovun.sample(Winner~.,data = trainingSet2, method = "both", p = 0.5, seed = 111, N = 645)$data
+table(ROSE$Winner)
+```
+
+
+
+# K-NN
+
+```{r}
+# Get the features of the training set
+trainingfeatures <- subset(ROSE, select=c(-Winner))
+# Get the labels of the training set
+traininglabels <- ROSE$Winner
+# Get the features of the testing set
+testingfeatures <- subset(testingSet2, select=c(-Winner))
+```
+
+```{r}
+# Load the classification library
+library(class)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(1,50, 1))
+{
+  predictedLabels = knn(trainingfeatures,testingfeatures,traininglabels,k=i)
+sizeTestSet = dim(testingSet2)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$KNN_RB <- predictedLabels
+```
+
+
+#SVM Model
+
+```{r}
+# Load the SVM Library
+library(e1071)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(10,100, 10))
+{
+  svmModel <- svm(Winner~., data=ROSE, kernel="linear", cost=i)
+  predictedLabels <-predict(svmModel, testingSet2)
+sizeTestSet = dim(testingSet)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$SVM_RB <- predictedLabels
+```
+
+# Combining predictions of models
+
+```{r}
+head(PredictionsTable)
+```
+
+```{r}
+PredictionsTable$KNN <- as.character(PredictionsTable$KNN)
+PredictionsTable$SVM <- as.character(PredictionsTable$SVM)
+PredictionsTable$KNN_RB <- as.character(PredictionsTable$KNN_RB)
+PredictionsTable$SVM_RB <- as.character(PredictionsTable$SVM_RB)
+```
+
+
+```{r}
+PredictionsTable[PredictionsTable == "Red"] <- 1
+PredictionsTable[PredictionsTable == "Blue"] <- 0
+```
+
+```{r}
+PredictionsTable$KNN <- as.numeric(PredictionsTable$KNN)
+PredictionsTable$SVM <- as.numeric(PredictionsTable$SVM)
+PredictionsTable$NN <- as.numeric(PredictionsTable$NN)
+PredictionsTable$KNN_RB <- as.numeric(PredictionsTable$KNN_RB)
+PredictionsTable$SVM_RB <- as.numeric(PredictionsTable$SVM_RB)
+```
+
+```{r}
+#Scoring 
+PredictionsTable$Score <- rowSums(PredictionsTable)
+```
+
+```{r}
+# Prediction 
+PredictionsTable$Winner <- ifelse(PredictionsTable$Score > 2.5, "Red", "Blue")
+```
+
+```{r}
+#Input Winner's Name
+PredictionsTable$Red <- testingSet$R_fighter
+PredictionsTable$Blue <- testingSet$B_fighter
+PredictionsTable$Winner_Name <- ifelse(PredictionsTable$Winner == "Red", as.character(PredictionsTable$Red), as.character(PredictionsTable$Blue))
+```
+
+# Results
+
+```{r}
+ResultsW <- PredictionsTable
+head(ResultsW)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the number of data points that are misclassified
+error = sum(PredictionsTable$Winner != testingSet2$Winner)
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (PredictionsTable$Winner != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (PredictionsTable$Winner == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (PredictionsTable$Winner != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (PredictionsTable$Winner == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+#--------------------------------------------------------------------------------------------------------------
+# Another way to fix the data imbalance is to "flip" the data from Red to Blue
+#--------------------------------------------------------------------------------------------------------------
+
+#--------------------------------------------------------------------------------------------------------------
+#Welterweight
+#--------------------------------------------------------------------------------------------------------------
+
+Read the data
+```{r}
+#Select Physical Features
+WelterweightPhy <-  Welterweight[c(1,2,3,69,70,71,136,137,138,139,140)]
+head(WelterweightPhy)
+```
+
+```{r}
+WelterweightPhyFlip = WelterweightPhy[,c(3,2,4:6,10,1,7:9,11)]
+WelterweightPhyFlip$B_fighter <- as.character(WelterweightPhyFlip$B_fighter)
+WelterweightPhyFlip$R_fighter <- as.character(WelterweightPhyFlip$R_fighter)
+head(WelterweightPhyFlip)
+```
+
+```{r}
+for(i in 1:dim(WelterweightPhyFlip)[1]){
+  if(WelterweightPhyFlip$Winner[i] == "Red"){
+  randomNum = runif(1)
+    if(randomNum < 0.25){
+      tempDf = WelterweightPhyFlip[i,2:6]
+      WelterweightPhyFlip[i,2:6] = WelterweightPhyFlip[i,7:11]
+      WelterweightPhyFlip[i,7:11] = tempDf[1:5]
+      WelterweightPhyFlip[i,1] = "Blue"
+    }
+  }
+}
+WelterweightPhyFlip$B_fighter <- as.factor(WelterweightPhyFlip$B_fighter)
+WelterweightPhyFlip$R_fighter <- as.factor(WelterweightPhyFlip$R_fighter)
+head(WelterweightPhyFlip)
+```
+
+```{r}
+table(WelterweightPhyFlip$Winner)
+WelterweightPhyFlip <- WelterweightPhyFlip[c(2,7,1,3,4,5,6,8,9,10,11)]
+```
+
+# Create testing & training sets for SVM, K-NN, & Neural Networks
+
+```{r}
+# Normalize All the Attributes
+for (i in 4:dim(WelterweightPhyFlip)[2])
+{
+  WelterweightPhyFlip[i] = (WelterweightPhyFlip[i]-mean(WelterweightPhyFlip[,i]))/sd(WelterweightPhyFlip[,i])
+}
+
+# Display the first few elements of the standarized data
+head(WelterweightPhyFlip)
+```
+
+```{r}
+# Create Training and Testing Sets
+num_samples = dim(WelterweightPhyFlip)[1]
+sampling.rate = 0.80
+training <- sample(1:num_samples, sampling.rate * num_samples, replace=FALSE)
+trainingSet <- WelterweightPhyFlip[training, ]
+testing <- setdiff(1:num_samples,training)
+testingSet <- WelterweightPhyFlip[testing, ]
+```
+
+```{r}
+# Slpit Fighter's names from sets
+trainingSet2 <- trainingSet[c(-1,-2)]
+testingSet2 <- testingSet[c(-1,-2)]
+```
+
+# K-Nearest Neighbors
+
+```{r}
+# Get the features of the training set
+trainingfeatures <- subset(trainingSet2, select=c(-Winner))
+# Get the labels of the training set
+traininglabels <- trainingSet2$Winner
+# Get the features of the testing set
+testingfeatures <- subset(testingSet2, select=c(-Winner))
+```
+
+```{r}
+# Load the classification library
+library(class)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(1,50, 1))
+{
+  predictedLabels = knn(trainingfeatures,testingfeatures,traininglabels,k=i)
+sizeTestSet = dim(testingSet2)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+
+```{r}
+# Create Predictions Table to store predictions from different models
+PredictionsTable <- data.frame(matrix(ncol = 3, nrow = dim(testingSet)[1]))
+x <- c("KNN","SVM","NN")
+colnames(PredictionsTable) <- x
+# Fill in KNN Col
+PredictionsTable$KNN <- predictedLabels
+```
+
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+#SVM
+
+```{r}
+# Load the SVM Library
+library(e1071)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(10,100, 10))
+{
+  svmModel <- svm(Winner~., data=trainingSet2, kernel="linear", cost=i)
+  predictedLabels <-predict(svmModel, testingSet2)
+sizeTestSet = dim(testingSet)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+
+```{r}
+# Fill in Table
+PredictionsTable$SVM <- predictedLabels
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+# Neural Networks
+
+```{r}
+# Convert the characters to numeric values
+# training
+trainingSet2$Winner <- as.character(trainingSet2$Winner)
+trainingSet2$Winner[trainingSet2$Winner=="Red"] = 0
+trainingSet2$Winner[trainingSet2$Winner=="Blue"] = 1
+trainingSet2$Winner <- as.numeric(trainingSet2$Winner)
+# testing
+testingSet2$Winner <- as.character(testingSet2$Winner)
+testingSet2$Winner[testingSet2$Winner=="Red"] = 0
+testingSet2$Winner[testingSet2$Winner=="Blue"] = 1
+testingSet2$Winner <- as.numeric(testingSet2$Winner)
+```
+
+```{r}
+#Load the Neural Net Library
+library(neuralnet)
+#Train a Neural Network. Note that the formula should be explicitly specified.
+#Since we are doing a classification, we need to set linear.output=FALSE
+#We will also use a Neural network with 2 hidden layers, with 7, 5 neurons respectively
+nnModel <- neuralnet(Winner~., data=trainingSet2, hidden=c(7,5), linear.output=FALSE)
+```
+
+```{r}
+# Plot
+plot(nnModel)
+```
+
+```{r}
+# Perform prdictions for the testing set
+predictedLabels <- neuralnet::compute(nnModel, testingSet2[,2:9])
+
+#The result is stored in predictedLabels$net.result
+#Note that we need to round the predictions to get 0 or 1
+predictedLabels<-round(predictedLabels$net.result)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the number of data points that are misclassified
+error = sum(predictedLabels != testingSet2$Winner)
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 0)
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 1)
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+```{r}
+# Fill in Table
+PredictionsTable$NN <- predictedLabels
+```
+
+```{r}
+# Convert #s to labels
+PredictionsTable$NN <- as.character(PredictionsTable$NN)
+PredictionsTable$NN[PredictionsTable$NN== "0" ] = "Red"
+PredictionsTable$NN[PredictionsTable$NN== "1"] = "Blue"
+```
+
+
+# Convert Back
+```{r}
+# Convert back
+# training
+trainingSet2$Winner[trainingSet2$Winner== 0 ] = "Red"
+trainingSet2$Winner[trainingSet2$Winner== 1 ] = "Blue"
+trainingSet2$Winner <- as.factor(trainingSet2$Winner)
+# testing
+testingSet2$Winner[testingSet2$Winner== 0 ] = "Red"
+testingSet2$Winner[testingSet2$Winner== 1 ] = "Blue"
+testingSet2$Winner <- as.factor(testingSet2$Winner)
+```
+
+# Combining predictions of models
+
+```{r}
+head(PredictionsTable)
+```
+
+```{r}
+PredictionsTable$KNN <- as.character(PredictionsTable$KNN)
+PredictionsTable$SVM <- as.character(PredictionsTable$SVM)
+```
+
+
+```{r}
+PredictionsTable[PredictionsTable == "Red"] <- 1
+PredictionsTable[PredictionsTable == "Blue"] <- 0
+```
+
+```{r}
+PredictionsTable$KNN <- as.numeric(PredictionsTable$KNN)
+PredictionsTable$SVM <- as.numeric(PredictionsTable$SVM)
+PredictionsTable$NN <- as.numeric(PredictionsTable$NN)
+```
+
+```{r}
+#Scoring 
+PredictionsTable$Score <- rowSums(PredictionsTable)
+```
+
+```{r}
+# Prediction 
+PredictionsTable$Winner <- ifelse(PredictionsTable$Score > 1.5, "Red", "Blue")
+```
+
+```{r}
+#Input Winner's Name
+PredictionsTable$Red <- testingSet$R_fighter
+PredictionsTable$Blue <- testingSet$B_fighter
+PredictionsTable$Winner_Name <- ifelse(PredictionsTable$Winner == "Red", as.character(PredictionsTable$Red), as.character(PredictionsTable$Blue))
+```
+
+# Results
+
+```{r}
+ResultsFlip1 <- PredictionsTable
+head(ResultsFlip1)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the number of data points that are misclassified
+error = sum(PredictionsTable$Winner != testingSet2$Winner)
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (PredictionsTable$Winner != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (PredictionsTable$Winner == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (PredictionsTable$Winner != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (PredictionsTable$Winner == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+#--------------------------------------------------------------------------------------------------------------
+#Combining Features 
+#--------------------------------------------------------------------------------------------------------------
+
+# Welterweight
+
+Read the data
+```{r}
+#Select Physical Features
+WelterweightPhy <- Welterweight[c(1,2,3,69,70,71,136,137,138,139,140)]
+head(WelterweightPhy)
+#Take the difference between features 
+WelterweightPhy$Height <- WelterweightPhy$B_Height_cms -WelterweightPhy$R_Height_cms
+WelterweightPhy$Reach <- WelterweightPhy$B_Reach_cms - WelterweightPhy$R_Reach_cms
+WelterweightPhy$Weight <- WelterweightPhy$B_Weight_lbs - WelterweightPhy$R_Weight_lbs
+WelterweightPhy$Age <- WelterweightPhy$B_age - WelterweightPhy$R_age
+WelterweightPhy$R_H_RF <- WelterweightPhy$R_Reach_cms/WelterweightPhy$R_Height_cms
+WelterweightPhy$R_H_BF <- WelterweightPhy$B_Reach_cms/WelterweightPhy$B_Height_cms
+WelterweightPhy <- WelterweightPhy[c(1,2,3,12,13,14,15,16,17)]
+```
+# Create testing & training sets for SVM, K-NN, & Neural Networks
+
+```{r}
+# Normalize All the Attributes
+for (i in 4:dim(WelterweightPhy)[2])
+{
+  WelterweightPhy[i] = (WelterweightPhy[i]-mean(WelterweightPhy[,i]))/sd(WelterweightPhy[,i])
+}
+
+# Display the first few elements of the standarized data
+head(WelterweightPhy)
+```
+
+```{r}
+# Create Training and Testing Sets
+num_samples = dim(WelterweightPhy)[1]
+sampling.rate = 0.80
+training <- sample(1:num_samples, sampling.rate * num_samples, replace=FALSE)
+trainingSet <- WelterweightPhy[training, ]
+testing <- setdiff(1:num_samples,training)
+testingSet <- WelterweightPhy[testing, ]
+```
+
+```{r}
+# Slpit Fighter's names from sets
+trainingSet2 <- trainingSet[c(-1,-2)]
+testingSet2 <- testingSet[c(-1,-2)]
+```
+
+
+# K-Nearest Neighbors
+
+```{r}
+# Get the features of the training set
+trainingfeatures <- subset(trainingSet2, select=c(-Winner))
+# Get the labels of the training set
+traininglabels <- trainingSet2$Winner
+# Get the features of the testing set
+testingfeatures <- subset(testingSet2, select=c(-Winner))
+```
+
+```{r}
+# Load the classification library
+library(class)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(1,50, 1))
+{
+  predictedLabels = knn(trainingfeatures,testingfeatures,traininglabels,k=i)
+sizeTestSet = dim(testingSet2)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+
+```{r}
+# Create Predictions Table to store predictions from different models
+PredictionsTable <- data.frame(matrix(ncol = 3, nrow = dim(testingSet)[1]))
+x <- c("KNN","SVM","NN")
+colnames(PredictionsTable) <- x
+# Fill in KNN Col
+PredictionsTable$KNN <- predictedLabels
+```
+
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+
+#SVM
+
+```{r}
+# Load the SVM Library
+library(e1071)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(10,100, 10))
+{
+  svmModel <- svm(Winner~., data=trainingSet2, kernel="linear", cost=i)
+  predictedLabels <-predict(svmModel, testingSet2)
+sizeTestSet = dim(testingSet)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$SVM <- predictedLabels
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+# Neural Networks
+
+
+
+```{r}
+# Convert the characters to numeric values
+# training
+trainingSet2$Winner <- as.character(trainingSet2$Winner)
+trainingSet2$Winner[trainingSet2$Winner=="Red"] = 0
+trainingSet2$Winner[trainingSet2$Winner=="Blue"] = 1
+trainingSet2$Winner <- as.numeric(trainingSet2$Winner)
+# testing
+testingSet2$Winner <- as.character(testingSet2$Winner)
+testingSet2$Winner[testingSet2$Winner=="Red"] = 0
+testingSet2$Winner[testingSet2$Winner=="Blue"] = 1
+testingSet2$Winner <- as.numeric(testingSet2$Winner)
+```
+
+```{r}
+#Load the Neural Net Library
+library(neuralnet)
+#Train a Neural Network. Note that the formula should be explicitly specified.
+#Since we are doing a classification, we need to set linear.output=FALSE
+#We will also use a Neural network with 2 hidden layers, with 7, 5 neurons respectively
+nnModel <- neuralnet(Winner~., data=trainingSet2, hidden=c(7,5), linear.output=FALSE)
+```
+
+```{r}
+# Plot
+plot(nnModel)
+```
+
+
+```{r}
+# Perform prdictions for the testing set
+predictedLabels <- neuralnet::compute(nnModel, testingSet2[,2:7])
+
+#The result is stored in predictedLabels$net.result
+#Note that we need to round the predictions to get 0 or 1
+predictedLabels<-round(predictedLabels$net.result)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the number of data points that are misclassified
+error = sum(predictedLabels != testingSet2$Winner)
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 0)
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 1)
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$NN <- predictedLabels
+```
+
+```{r}
+# Convert #s to labels
+PredictionsTable$NN <- as.character(PredictionsTable$NN)
+PredictionsTable$NN[PredictionsTable$NN== "0" ] = "Red"
+PredictionsTable$NN[PredictionsTable$NN== "1"] = "Blue"
+```
+
+
+
+# Convert Back
+```{r}
+# Convert back
+# training
+trainingSet2$Winner[trainingSet2$Winner== 0 ] = "Red"
+trainingSet2$Winner[trainingSet2$Winner== 1 ] = "Blue"
+trainingSet2$Winner <- as.factor(trainingSet2$Winner)
+# testing
+testingSet2$Winner[testingSet2$Winner== 0 ] = "Red"
+testingSet2$Winner[testingSet2$Winner== 1 ] = "Blue"
+testingSet2$Winner <- as.factor(testingSet2$Winner)
+```
+
+# Fixing class Imbalance 
+Most the data has the red class winning, which should not be the case due to qualitative reasons. Both red and blue class should equally represented as possible. 
+
+Ideally would convert winning red observations into winning blue observations, but do not know who to do that yet.
+
+Instead, I will try to achieve this by over and under sampling. 
+
+```{r}
+library(ROSE)
+```
+
+```{r}
+#See # of wins between colors
+table(trainingSet$Winner)
+```
+
+```{r}
+ROSE <- ovun.sample(Winner~.,data = trainingSet2, method = "both", p = 0.5, seed = 111, N = 466)$data
+table(ROSE$Winner)
+```
+
+
+
+# K-NN
+
+```{r}
+# Get the features of the training set
+trainingfeatures <- subset(ROSE, select=c(-Winner))
+# Get the labels of the training set
+traininglabels <- ROSE$Winner
+# Get the features of the testing set
+testingfeatures <- subset(testingSet2, select=c(-Winner))
+```
+
+```{r}
+# Load the classification library
+library(class)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(1,50, 1))
+{
+  predictedLabels = knn(trainingfeatures,testingfeatures,traininglabels,k=i)
+sizeTestSet = dim(testingSet2)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$KNN_RB <- predictedLabels
+```
+
+
+#SVM Model
+
+```{r}
+# Load the SVM Library
+library(e1071)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(10,100, 10))
+{
+  svmModel <- svm(Winner~., data=ROSE, kernel="linear", cost=i)
+  predictedLabels <-predict(svmModel, testingSet2)
+sizeTestSet = dim(testingSet)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$SVM_RB <- predictedLabels
+```
+
+# Combining predictions of models
+
+```{r}
+head(PredictionsTable)
+```
+
+```{r}
+PredictionsTable$KNN <- as.character(PredictionsTable$KNN)
+PredictionsTable$SVM <- as.character(PredictionsTable$SVM)
+PredictionsTable$KNN_RB <- as.character(PredictionsTable$KNN_RB)
+PredictionsTable$SVM_RB <- as.character(PredictionsTable$SVM_RB)
+```
+
+
+```{r}
+PredictionsTable[PredictionsTable == "Red"] <- 1
+PredictionsTable[PredictionsTable == "Blue"] <- 0
+```
+
+```{r}
+PredictionsTable$KNN <- as.numeric(PredictionsTable$KNN)
+PredictionsTable$SVM <- as.numeric(PredictionsTable$SVM)
+PredictionsTable$NN <- as.numeric(PredictionsTable$NN)
+PredictionsTable$KNN_RB <- as.numeric(PredictionsTable$KNN_RB)
+PredictionsTable$SVM_RB <- as.numeric(PredictionsTable$SVM_RB)
+```
+
+```{r}
+#Scoring 
+PredictionsTable$Score <- rowSums(PredictionsTable)
+```
+
+```{r}
+# Prediction 
+PredictionsTable$Winner <- ifelse(PredictionsTable$Score > 2.5, "Red", "Blue")
+```
+
+```{r}
+#Input Winner's Name
+PredictionsTable$Red <- testingSet$R_fighter
+PredictionsTable$Blue <- testingSet$B_fighter
+PredictionsTable$Winner_Name <- ifelse(PredictionsTable$Winner == "Red", as.character(PredictionsTable$Red), as.character(PredictionsTable$Blue))
+```
+
+# Results
+
+```{r}
+ResultsM2 <- PredictionsTable
+head(ResultsM2)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the number of data points that are misclassified
+error = sum(PredictionsTable$Winner != testingSet2$Winner)
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (PredictionsTable$Winner != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (PredictionsTable$Winner == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (PredictionsTable$Winner != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (PredictionsTable$Winner == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+#--------------------------------------------------------------------------------------------------------------
+# Another way to fix the data imbalance is to "flip" the data from Red to Blue & COMBINE features
+#--------------------------------------------------------------------------------------------------------------
+
+#Welterweight
+Read the data
+```{r}
+#Select Physical Features
+WelterweightPhy <-  Welterweight[c(1,2,3,69,70,71,136,137,138,139,140)]
+head(WelterweightPhy)
+```
+
+```{r}
+WelterweightPhyFlip = WelterweightPhy[,c(3,2,4:6,10,1,7:9,11)]
+WelterweightPhyFlip$B_fighter <- as.character(WelterweightPhyFlip$B_fighter)
+WelterweightPhyFlip$R_fighter <- as.character(WelterweightPhyFlip$R_fighter)
+head(WelterweightPhyFlip)
+```
+
+```{r}
+for(i in 1:dim(WelterweightPhyFlip)[1]){
+  if(WelterweightPhyFlip$Winner[i] == "Red"){
+  randomNum = runif(1)
+    if(randomNum < 0.25){
+      tempDf = WelterweightPhyFlip[i,2:6]
+      WelterweightPhyFlip[i,2:6] = WelterweightPhyFlip[i,7:11]
+      WelterweightPhyFlip[i,7:11] = tempDf[1:5]
+      WelterweightPhyFlip[i,1] = "Blue"
+    }
+  }
+}
+WelterweightPhyFlip$B_fighter <- as.factor(WelterweightPhyFlip$B_fighter)
+WelterweightPhyFlip$R_fighter <- as.factor(WelterweightPhyFlip$R_fighter)
+head(WelterweightPhyFlip)
+```
+
+```{r}
+table(WelterweightPhyFlip$Winner)
+WelterweightPhyFlip <- WelterweightPhyFlip[c(2,7,1,3,4,5,6,8,9,10,11)]
+```
+
+Read the data
+```{r}
+
+#Take the difference between features 
+WelterweightPhyFlip$Height <- WelterweightPhyFlip$B_Height_cms -WelterweightPhyFlip$R_Height_cms
+WelterweightPhyFlip$Reach <- WelterweightPhyFlip$B_Reach_cms - WelterweightPhyFlip$R_Reach_cms
+WelterweightPhyFlip$Weight <- WelterweightPhyFlip$B_Weight_lbs - WelterweightPhyFlip$R_Weight_lbs
+WelterweightPhyFlip$Age <- WelterweightPhyFlip$B_age - WelterweightPhyFlip$R_age
+WelterweightPhyFlip$R_H_RF <- WelterweightPhyFlip$R_Reach_cms/WelterweightPhyFlip$R_Height_cms
+WelterweightPhyFlip$R_H_BF <- WelterweightPhyFlip$B_Reach_cms/WelterweightPhyFlip$B_Height_cms
+WelterweightPhyFlip <- WelterweightPhyFlip[c(1,2,3,12,13,14,15,16,17)]
+```
+
+# Create testing & training sets for SVM, K-NN, & Neural Networks
+
+```{r}
+# Normalize All the Attributes
+for (i in 4:dim(WelterweightPhyFlip)[2])
+{
+  WelterweightPhyFlip[i] = (WelterweightPhyFlip[i]-mean(WelterweightPhyFlip[,i]))/sd(WelterweightPhyFlip[,i])
+}
+
+# Display the first few elements of the standarized data
+head(WelterweightPhyFlip)
+```
+
+```{r}
+# Create Training and Testing Sets
+num_samples = dim(WelterweightPhyFlip)[1]
+sampling.rate = 0.80
+training <- sample(1:num_samples, sampling.rate * num_samples, replace=FALSE)
+trainingSet <- WelterweightPhyFlip[training, ]
+testing <- setdiff(1:num_samples,training)
+testingSet <- WelterweightPhyFlip[testing, ]
+```
+
+```{r}
+# Slpit Fighter's names from sets
+trainingSet2 <- trainingSet[c(-1,-2)]
+testingSet2 <- testingSet[c(-1,-2)]
+```
+
+
+# K-Nearest Neighbors
+
+```{r}
+# Get the features of the training set
+trainingfeatures <- subset(trainingSet2, select=c(-Winner))
+# Get the labels of the training set
+traininglabels <- trainingSet2$Winner
+# Get the features of the testing set
+testingfeatures <- subset(testingSet2, select=c(-Winner))
+```
+
+```{r}
+# Load the classification library
+library(class)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(1,50, 1))
+{
+  predictedLabels = knn(trainingfeatures,testingfeatures,traininglabels,k=i)
+sizeTestSet = dim(testingSet2)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+
+```{r}
+# Create Predictions Table to store predictions from different models
+PredictionsTable <- data.frame(matrix(ncol = 3, nrow = dim(testingSet)[1]))
+x <- c("KNN","SVM","NN")
+colnames(PredictionsTable) <- x
+# Fill in KNN Col
+PredictionsTable$KNN <- predictedLabels
+```
+
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+
+#SVM
+
+```{r}
+# Load the SVM Library
+library(e1071)
+```
+
+```{r}
+lowestRate <- 100
+bestTuning <- 0
+for (i in seq(10,100, 10))
+{
+  svmModel <- svm(Winner~., data=trainingSet2, kernel="linear", cost=i)
+  predictedLabels <-predict(svmModel, testingSet2)
+sizeTestSet = dim(testingSet)[1]
+error = sum(predictedLabels != testingSet2$Winner)
+misclassification_rate = error/sizeTestSet
+if(misclassification_rate < lowestRate){
+  lowestRate <- misclassification_rate
+  bestTuning <- i
+}
+}
+bestTuning
+lowestRate
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$SVM <- predictedLabels
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
+# Neural Networks
+
+
+```{r}
+# Convert the characters to numeric values
+# training
+trainingSet2$Winner <- as.character(trainingSet2$Winner)
+trainingSet2$Winner[trainingSet2$Winner=="Red"] = 0
+trainingSet2$Winner[trainingSet2$Winner=="Blue"] = 1
+trainingSet2$Winner <- as.numeric(trainingSet2$Winner)
+# testing
+testingSet2$Winner <- as.character(testingSet2$Winner)
+testingSet2$Winner[testingSet2$Winner=="Red"] = 0
+testingSet2$Winner[testingSet2$Winner=="Blue"] = 1
+testingSet2$Winner <- as.numeric(testingSet2$Winner)
+```
+
+```{r}
+#Load the Neural Net Library
+library(neuralnet)
+#Train a Neural Network. Note that the formula should be explicitly specified.
+#Since we are doing a classification, we need to set linear.output=FALSE
+#We will also use a Neural network with 2 hidden layers, with 7, 5 neurons respectively
+nnModel <- neuralnet(Winner~., data=trainingSet2, hidden=c(7,5), linear.output=FALSE)
+```
+
+```{r}
+# Plot
+plot(nnModel)
+```
+
+
+```{r}
+# Perform prdictions for the testing set
+predictedLabels <- neuralnet::compute(nnModel, testingSet2[,2:7])
+
+#The result is stored in predictedLabels$net.result
+#Note that we need to round the predictions to get 0 or 1
+predictedLabels<-round(predictedLabels$net.result)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the number of data points that are misclassified
+error = sum(predictedLabels != testingSet2$Winner)
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (predictedLabels == 0)
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the data points that are misclassified
+IsWrong = (predictedLabels != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (predictedLabels == 1)
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Fill in Table
+PredictionsTable$NN <- predictedLabels
+```
+
+```{r}
+# Convert #s to labels
+PredictionsTable$NN <- as.character(PredictionsTable$NN)
+PredictionsTable$NN[PredictionsTable$NN== "0" ] = "Red"
+PredictionsTable$NN[PredictionsTable$NN== "1"] = "Blue"
+```
+
+# Convert Back
+```{r}
+# Convert back
+# training
+trainingSet2$Winner[trainingSet2$Winner== 0 ] = "Red"
+trainingSet2$Winner[trainingSet2$Winner== 1 ] = "Blue"
+trainingSet2$Winner <- as.factor(trainingSet2$Winner)
+# testing
+testingSet2$Winner[testingSet2$Winner== 0 ] = "Red"
+testingSet2$Winner[testingSet2$Winner== 1 ] = "Blue"
+testingSet2$Winner <- as.factor(testingSet2$Winner)
+```
+
+# Combining predictions of models
+
+```{r}
+head(PredictionsTable)
+```
+
+```{r}
+PredictionsTable$KNN <- as.character(PredictionsTable$KNN)
+PredictionsTable$SVM <- as.character(PredictionsTable$SVM)
+```
+
+
+```{r}
+PredictionsTable[PredictionsTable == "Red"] <- 1
+PredictionsTable[PredictionsTable == "Blue"] <- 0
+```
+
+```{r}
+PredictionsTable$KNN <- as.numeric(PredictionsTable$KNN)
+PredictionsTable$SVM <- as.numeric(PredictionsTable$SVM)
+PredictionsTable$NN <- as.numeric(PredictionsTable$NN)
+```
+
+```{r}
+#Scoring 
+PredictionsTable$Score <- rowSums(PredictionsTable)
+```
+
+```{r}
+# Prediction 
+PredictionsTable$Winner <- ifelse(PredictionsTable$Score > 1.5, "Red", "Blue")
+```
+
+```{r}
+#Input Winner's Name
+PredictionsTable$Red <- testingSet$R_fighter
+PredictionsTable$Blue <- testingSet$B_fighter
+PredictionsTable$Winner_Name <- ifelse(PredictionsTable$Winner == "Red", as.character(PredictionsTable$Red), as.character(PredictionsTable$Blue))
+```
+
+# Results
+
+```{r}
+ResultsFlip1 <- PredictionsTable
+head(ResultsFlip1)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet2)[1]
+# Get the number of data points that are misclassified
+error = sum(PredictionsTable$Winner != testingSet2$Winner)
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (PredictionsTable$Winner != testingSet2$Winner)
+# Get the data points that are classified as L
+IsR = (PredictionsTable$Winner == 'Red')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndR = (IsWrong & IsR)
+error = sum(IsWrongAndR)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+```{r}
+# Get the number of data points in the test set
+sizeTestSet = dim(testingSet)[1]
+# Get the data points that are misclassified
+IsWrong = (PredictionsTable$Winner != testingSet2$Winner)
+# Get the data points that are classified as L
+IsB = (PredictionsTable$Winner == 'Blue')
+# Get the data points that are misclassified and are classified as L
+IsWrongAndB = (IsWrong & IsB)
+error = sum(IsWrongAndB)
+
+# Calculate the misclassification rate
+misclassification_rate = error/sizeTestSet
+# Display the misclassification rate
+print(misclassification_rate)
+```
+
+
